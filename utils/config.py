@@ -36,7 +36,11 @@ class Settings:
 
     use_mock_model: bool = _get_bool("USE_MOCK_MODEL", True)
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    openai_base_url: str = os.getenv("OPENAI_BASE_URL", "").strip()
     model_name: str = os.getenv("MODEL_NAME", "gpt-4o-mini")
+    model_temperature: float = float(os.getenv("MODEL_TEMPERATURE", "0.3"))
+    model_max_tokens: int = _get_int("MODEL_MAX_TOKENS", 800)
+    model_timeout_seconds: int = _get_int("MODEL_TIMEOUT_SECONDS", 30)
 
     max_history_rounds: int = _get_int("MAX_HISTORY_ROUNDS", 6)
 
