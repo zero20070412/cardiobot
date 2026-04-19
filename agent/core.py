@@ -27,267 +27,59 @@ ALGORITHM_KEYWORDS = {
     "fusion": ("融合", "多模态", "综合", "transformer"),
 }
 
-
-def resolve_system_prompt(explicit_prompt: str | None = None) -> str:
-    """Return an explicit prompt, a prompt from agent.prompts, or a safe fallback."""
-    if explicit_prompt and explicit_prompt.strip():
-        return explicit_prompt.strip()
-
-    try:
-        prompts_module = import_module("agent.prompts")
-    except Exception:
-        return DEFAULT_SYSTEM_PROMPT
-
-    for attr_name in (
-        "SYSTEM_PROMPT",
-        "DEFAULT_SYSTEM_PROMPT",
-        "CARDIOBOT_SYSTEM_PROMPT",
-    ):
-        value = getattr(prompts_module, attr_name, None)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-
-    for attr_name in ("get_system_prompt", "build_system_prompt"):
-        value = getattr(prompts_module, attr_name, None)
-        if callable(value):
-            try:
-                resolved = value()
-            except Exception:
-                continue
-            if isinstance(resolved, str) and resolved.strip():
-                return resolved.strip()
-
-    return DEFAULT_SYSTEM_PROMPT
-
-
-def should_run_algorithms(
-    user_message: str,
-    *,
-    signal_payload: Mapping[str, Any] | None = None,
-    requested_modules: Sequence[str] | None = None,
-    run_algorithms: bool | None = None,
-) -> bool:
-    """Decide whether placeholder algorithms should be called for this turn."""
-    if run_algorithms is not None:
-        return run_algorithms
-
-    if requested_modules:
-        return True
-
-    if signal_payload:
-        return True
-
-    normalized = user_message.lower()
-    return any(keyword in normalized for values in ALGORITHM_KEYWORDS.values() for keyword in values)
-
-
-def select_algorithm_modules(
-    user_message: str,
-    *,
-    signal_payload: Mapping[str, Any] | None = None,
-    requested_modules: Sequence[str] | None = None,
-) -> list[str]:
-    """Resolve which placeholder modules should be called for the current turn."""
-    if requested_modules:
-        modules = [item.strip().lower() for item in requested_modules if item.strip()]
-        return [item for item in modules if item in ALGORITHM_KEYWORDS]
-
-    normalized = user_message.lower()
-    selected = [
-        module_name
-        for module_name, keywords in ALGORITHM_KEYWORDS.items()
-        if any(keyword in normalized for keyword in keywords)
-    ]
-
-    if signal_payload:
-        payload_to_module = {
-            "ecg_signal": "ecg",
-            "pcg_audio": "pcg",
-            "rr_intervals": "hrv",
-            "cnn_features": "cnn",
-            "fusion_context": "fusion",
-            "ecg_features": "fusion",
-            "hrv_features": "fusion",
-            "pcg_features": "fusion",
-        }
-        for key, module_name in payload_to_module.items():
-            if key in signal_payload and module_name not in selected:
-                selected.append(module_name)
-
-    return selected
-
-
-def dispatch_algorithm_results(
-    *,
-    user_message: str,
-    signal_payload: Mapping[str, Any] | None = None,
-    requested_modules: Sequence[str] | None = None,
-) -> dict[str, dict[str, object]]:
-    """Run the selected placeholder algorithms and collect their outputs."""
-    payload = dict(signal_payload or {})
-    modules = select_algorithm_modules(
-        user_message,
-        signal_payload=payload,
-        requested_modules=requested_modules,
-    )
-    results: dict[str, dict[str, object]] = {}
-
-    if "ecg" in modules:
-        results["ecg"] = _safe_algorithm_call(
-            analyze_ecg,
-            signal_data=payload.get("ecg_signal"),
-        )
-
-    if "pcg" in modules:
-        results["pcg"] = _safe_algorithm_call(
-            analyze_pcg,
-            audio_data=payload.get("pcg_audio"),
-        )
-
-    if "hrv" in modules:
-        results["hrv"] = _safe_algorithm_call(
-            analyze_hrv,
-            rr_intervals=payload.get("rr_intervals"),
-        )
-
-    if "cnn" in modules:
-        results["cnn"] = _safe_algorithm_call(
-            analyze_cnn,
-            features=payload.get("cnn_features"),
-        )
-
-    if "fusion" in modules:
-        results["fusion"] = _safe_algorithm_call(
-            analyze_fusion,
-            ecg_features=payload.get("ecg_features"),
-            hrv_features=payload.get("hrv_features"),
-            pcg_features=payload.get("pcg_features"),
-            extra_context=payload.get("fusion_context"),
-        )
-
-    return results
-
-
-def build_algorithm_context(algorithm_results: Mapping[str, Mapping[str, object]]) -> str:
-    """Convert algorithm outputs into a compact text block for the model."""
-    if not algorithm_results:
-        return ""
-
-    blocks: list[str] = []
-    for module_name, result in algorithm_results.items():
-        summary = str(result.get("summary", "")).strip()
-        risk_level = str(result.get("risk_level", "")).strip()
-        status = str(result.get("status", "")).strip()
-        metrics = result.get("metrics") or result.get("prediction") or {}
-
-        metric_parts: list[str] = []
-        if isinstance(metrics, Mapping):
-            for key, value in metrics.items():
-                metric_parts.append(f"{key}={value}")
-
-        text = f"{module_name.upper()}: status={status}"
-        if risk_level:
-            text += f", risk={risk_level}"
-        if summary:
-            text += f", summary={summary}"
-        if metric_parts:
-            text += f", metrics: {'; '.join(metric_parts)}"
-        blocks.append(text)
-
-    return "\n".join(blocks)
-
-
-def build_model_input(
-    *,
-    user_message: str,
-    algorithm_results: Mapping[str, Mapping[str, object]],
-) -> str:
-    """Merge the raw user message with algorithm context for model consumption."""
-    algorithm_context = build_algorithm_context(algorithm_results)
-    if not algorithm_context:
-        return user_message.strip()
-
-    return (
-        "以下是当前轮次可用的算法分析结果，请结合这些结果回答用户。\n"
-        f"{algorithm_context}\n\n"
-        f"用户原始消息：{user_message.strip()}"
-    )
-
-
 def get_agent_response(
     user_message: str,
-    *,
     session_id: str = "default",
-    system_prompt: str | None = None,
-    signal_payload: Mapping[str, Any] | None = None,
-    requested_modules: Sequence[str] | None = None,
-    run_algorithms: bool | None = None,
-    memory_store: MemoryStore | None = None,
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    *,
     model_client: LLMClient | None = None,
-) -> dict[str, object]:
-    """Main B-side orchestration entry for multi-turn dialogue."""
-    cleaned_message = user_message.strip()
-    if not cleaned_message:
-        raise ValueError("user_message cannot be empty.")
-
-    resolved_session_id = session_id.strip() or "default"
-    store = memory_store or default_memory_store
+    memory_store: MemoryStore | None = None,
+) -> dict[str, Any]:
+    """
+    后端的调度中心：处理算法逻辑并调用 LLM。
+    """
     client = model_client or default_model_client
-    conversation = store.get_session(resolved_session_id)
+    store = memory_store or default_memory_store
 
-    resolved_prompt = resolve_system_prompt(system_prompt)
-    conversation.set_system_message(resolved_prompt)
-    history_before = conversation.get_messages(include_system=False)
+    # 1. 获取并保存用户消息
+    conversation = store.get_session(session_id.strip() or "default")
+    conversation.add_message(role="user", content=user_message)
 
-    algorithm_results: dict[str, dict[str, object]] = {}
-    if should_run_algorithms(
-        cleaned_message,
-        signal_payload=signal_payload,
-        requested_modules=requested_modules,
-        run_algorithms=run_algorithms,
-    ):
-        algorithm_results = dispatch_algorithm_results(
-            user_message=cleaned_message,
-            signal_payload=signal_payload,
-            requested_modules=requested_modules,
-        )
+    # 2. 算法占位逻辑：根据关键词模拟算法分析
+    algorithm_results = []
+    lower_msg = user_message.lower()
+    for algo_id, keywords in ALGORITHM_KEYWORDS.items():
+        if any(kw in lower_msg for kw in keywords):
+            # 模拟算法调用
+            result = _safe_algorithm_call(lambda: {"module": algo_id, "status": "success", "summary": f"检测到{algo_id}相关特征"})
+            algorithm_results.append(result)
 
-    model_input = build_model_input(
-        user_message=cleaned_message,
-        algorithm_results=algorithm_results,
-    )
+    # 3. 构造增强提示词
+    model_input = user_message
+    if algorithm_results:
+        algo_summary = "\n".join([f"- {res['module']}: {res['summary']}" for res in algorithm_results])
+        model_input += f"\n\n[系统算法分析结果]:\n{algo_summary}"
 
+    # 4. 调用大模型 API
     try:
-        model_response = client.chat(
+        history = conversation.get_messages(include_system=False)
+        response = client.chat(
             user_message=model_input,
-            history=history_before,
-            system_prompt=resolved_prompt,
+            history=history,
+            system_prompt=system_prompt,
         )
+        reply_text = response.text
     except ModelClientError as exc:
-        model_response = ModelResponse(
-            text=(
-                "当前模型服务暂时不可用，我先保留了本轮消息。"
-                f" 你可以稍后重试，或继续进行界面与算法联调。错误信息：{exc}"
-            ),
-            model_name=client.model_name,
-            used_mock=bool(getattr(client, "use_mock", False)),
-        )
+        reply_text = f"抱歉，处理您的请求时出错：{exc}"
 
-    conversation.add_user_message(cleaned_message)
-    conversation.add_assistant_message(model_response.text)
-
+    # 5. 保存助手回复并返回
+    conversation.add_message(role="assistant", content=reply_text)
+    
     return {
-        "session_id": resolved_session_id,
-        "reply": model_response.text,
-        "system_prompt": resolved_prompt,
-        "history": conversation.get_messages(),
-        "algorithm_results": algorithm_results,
-        "model": {
-            "name": model_response.model_name,
-            "used_mock": model_response.used_mock,
-        },
+        "reply": reply_text,
+        "algorithms": algorithm_results,
+        "session_id": session_id,
     }
-
 
 def get_session_history(
     session_id: str = "default",
@@ -295,11 +87,10 @@ def get_session_history(
     include_system: bool = True,
     memory_store: MemoryStore | None = None,
 ) -> list[dict[str, str]]:
-    """Return the current history for a session."""
+    """获取指定会话的历史记录。"""
     store = memory_store or default_memory_store
     conversation = store.get_session(session_id.strip() or "default")
     return conversation.get_messages(include_system=include_system)
-
 
 def clear_session_history(
     session_id: str = "default",
@@ -307,15 +98,15 @@ def clear_session_history(
     keep_system_message: bool = True,
     memory_store: MemoryStore | None = None,
 ) -> None:
-    """Clear a session while optionally keeping the leading system prompt."""
+    """清空会话。"""
     store = memory_store or default_memory_store
     store.clear_session(
         session_id.strip() or "default",
         keep_system_message=keep_system_message,
     )
 
-
 def _safe_algorithm_call(function: Any, **kwargs: Any) -> dict[str, object]:
+    """安全地执行算法占位函数。"""
     try:
         result = function(**kwargs)
     except Exception as exc:
@@ -323,20 +114,8 @@ def _safe_algorithm_call(function: Any, **kwargs: Any) -> dict[str, object]:
         return {
             "module": module_name,
             "status": "error",
-            "summary": f"Placeholder algorithm call failed: {exc}",
+            "summary": f"算法调用失败: {exc}",
             "risk_level": "unknown",
             "meta": {"placeholder_only": True},
         }
-
     return dict(result)
-
-
-__all__ = [
-    "build_algorithm_context",
-    "build_model_input",
-    "clear_session_history",
-    "dispatch_algorithm_results",
-    "get_agent_response",
-    "get_session_history",
-    "resolve_system_prompt",
-]
