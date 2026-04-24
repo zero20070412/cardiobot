@@ -1,35 +1,47 @@
 import gradio as gr
 import os
 
+# 1. 确保在函数外部定义了这些路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
 mic_icon_path = os.path.join(current_dir, "213麦克风.png")
+kb_icon_path = os.path.join(current_dir, "键盘.webp")
 
 def create_chat_panel():
     with gr.Column():
         chatbot = gr.Chatbot(label=None, show_label=False, height=500)
         
         with gr.Row(elem_id="gemini-capsule-row"):
-            # 左侧安全图标
-            gr.Button("", elem_id="safety-icon", interactive=False)
-            
-            # 中间输入框
+            # 文本输入框
             msg_input = gr.Textbox(
-                placeholder="发信息或按住说话",
+                placeholder="发信息...",
                 container=False,
                 show_label=False,
+                lines=1,
+                max_lines=6,
                 elem_id="gemini-input-box",
                 scale=20
             )
             
-            # 右侧：使用修正后的相对路径加载图片
-            voice_btn = gr.Button(
+            # 语音输入框
+            audio_input = gr.Audio(
+                sources=["microphone"], 
+                type="filepath",
+                visible=False,
+                elem_id="gemini-audio-box",
+                scale=20,
+                show_label=False,
+                container=False,
+            )
+            
+            # 2. 这里引用上面的 mic_icon_path 就不会报错了
+            toggle_btn = gr.Button(
                 value="", 
                 icon=mic_icon_path, 
-                elem_id="mic-icon", 
+                elem_id="toggle-icon", 
                 visible=True
             )
             
-            # 发送按钮
-            send_btn = gr.Button("➔", elem_id="gemini-send-btn", visible=False)
+            send_btn = gr.Button("➔", elem_id="gemini-send-btn", visible=True)
         
-    return chatbot, msg_input, send_btn, voice_btn
+    # 3. 确保返回的变量名与 app.py 接收的一一对应
+    return chatbot, msg_input, audio_input, toggle_btn, send_btn, mic_icon_path, kb_icon_path
