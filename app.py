@@ -89,6 +89,18 @@ gemini_ultimate_css = """
     color: #202124 !important;
     font-size: 18px !important;
 }
+
+.gradio-container .gr-panel {
+    margin-top: 0 !important;
+}
+
+#sidebar-container {
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+}
+.gr-block.gr-box {
+    margin-top: 0 !important;
+}
 """
 
 def handle_chat(user_text, user_audio, input_mode, chat_history):
