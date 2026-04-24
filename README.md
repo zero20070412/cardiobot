@@ -14,7 +14,8 @@ cardiobot/
 │   ├── core.py           # 主调度函数 get_agent_response()
 │   ├── model.py          # 大模型 API 封装（OpenAI/DeepSeek）
 │   ├── memory.py         # 会话历史管理
-│   └── prompts.py        # 系统提示词
+│   ├── prompts.py        # 系统提示词
+|   └──history_manager.py #保存历史记录
 │
 ├── algorithms/           # 算法预留区
 │   ├── __init__.py

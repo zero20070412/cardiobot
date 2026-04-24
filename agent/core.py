@@ -35,9 +35,6 @@ def get_agent_response(
     model_client: LLMClient | None = None,
     memory_store: MemoryStore | None = None,
 ) -> dict[str, Any]:
-    """
-    后端的调度中心：处理算法逻辑并调用 LLM。
-    """
     client = model_client or default_model_client
     store = memory_store or default_memory_store
 
@@ -45,12 +42,11 @@ def get_agent_response(
     conversation = store.get_session(session_id.strip() or "default")
     conversation.add_message(role="user", content=user_message)
 
-    # 2. 算法占位逻辑：根据关键词模拟算法分析
+    # 2. 算法占位逻辑
     algorithm_results = []
     lower_msg = user_message.lower()
     for algo_id, keywords in ALGORITHM_KEYWORDS.items():
         if any(kw in lower_msg for kw in keywords):
-            # 模拟算法调用
             result = _safe_algorithm_call(lambda: {"module": algo_id, "status": "success", "summary": f"检测到{algo_id}相关特征"})
             algorithm_results.append(result)
 
@@ -60,20 +56,22 @@ def get_agent_response(
         algo_summary = "\n".join([f"- {res['module']}: {res['summary']}" for res in algorithm_results])
         model_input += f"\n\n[系统算法分析结果]:\n{algo_summary}"
 
-    # 4. 调用大模型 API
     try:
         history = conversation.get_messages(include_system=False)
+        if history and history[-1]["role"] == "user":
+            history = history[:-1] 
+
         response = client.chat(
             user_message=model_input,
             history=history,
             system_prompt=system_prompt,
         )
         reply_text = response.text
-    except ModelClientError as exc:
-        reply_text = f"抱歉，处理您的请求时出错：{exc}"
-
-    # 5. 保存助手回复并返回
-    conversation.add_message(role="assistant", content=reply_text)
+        conversation.add_message(role="assistant", content=reply_text)
+        
+    except Exception as e:
+        reply_text = f"抱歉，系统调用模型时出现错误: {str(e)}"
+        conversation.add_message(role="assistant", content=reply_text)
     
     return {
         "reply": reply_text,
@@ -87,7 +85,6 @@ def get_session_history(
     include_system: bool = True,
     memory_store: MemoryStore | None = None,
 ) -> list[dict[str, str]]:
-    """获取指定会话的历史记录。"""
     store = memory_store or default_memory_store
     conversation = store.get_session(session_id.strip() or "default")
     return conversation.get_messages(include_system=include_system)
@@ -98,7 +95,6 @@ def clear_session_history(
     keep_system_message: bool = True,
     memory_store: MemoryStore | None = None,
 ) -> None:
-    """清空会话。"""
     store = memory_store or default_memory_store
     store.clear_session(
         session_id.strip() or "default",
@@ -106,7 +102,6 @@ def clear_session_history(
     )
 
 def _safe_algorithm_call(function: Any, **kwargs: Any) -> dict[str, object]:
-    """安全地执行算法占位函数。"""
     try:
         result = function(**kwargs)
     except Exception as exc:
